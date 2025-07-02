@@ -1,8 +1,12 @@
 import streamlit as st
 import requests
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # Hugging Face API setup
-API_TOKEN = "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"
+API_TOKEN = os.getenv("HF_API_KEY")
 API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
 
 headers = {
