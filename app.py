@@ -2,18 +2,59 @@ import streamlit as st
 import requests
 from dotenv import load_dotenv
 import os
+import json
 
 load_dotenv()
 
-# Hugging Face API setup
-API_TOKEN = os.getenv("HF_API_KEY")
-API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+# API setup
+HF_API_TOKEN = os.getenv("HF_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+HF_API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-headers = {
-    "Authorization": f"Bearer {API_TOKEN}"
+hf_headers = {
+    "Authorization": f"Bearer {HF_API_TOKEN}"
 }
 
-# Query HF API with the dynamically built prompt
+
+def generate_with_gemini(prompt):
+    """Generate response using Gemini API"""
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
+    response = requests.post(GEMINI_API_URL, json=payload)
+
+    if response.status_code == 200:
+        result = response.json()
+        if 'candidates' in result and len(result['candidates']) > 0:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            raise Exception("No response from Gemini API")
+    else:
+        raise Exception(f"Gemini API error: {response.status_code} - {response.text}")
+
+
+def generate_with_huggingface(prompt):
+    """Generate response using Hugging Face API"""
+    payload = {"inputs": prompt, "options": {"wait_for_model": True}}
+    response = requests.post(HF_API_URL, headers=hf_headers, json=payload)
+
+    if response.status_code == 200:
+        output = response.json()
+        if isinstance(output, list):
+            return output[0]['generated_text']
+        elif isinstance(output, dict) and 'generated_text' in output:
+            return output['generated_text']
+        else:
+            return str(output)
+    else:
+        raise Exception(f"Hugging Face API error: {response.status_code} - {response.text}")
+
+
+# Query APIs with fallback mechanism
 def generate_interview_test(jd, company_type, level, num_mcq, include_coding, num_short_ans):
     coding_section = ""
     if include_coding:
@@ -42,7 +83,7 @@ Generate a comprehensive technical interview test as per the following structure
 
 2. **Coding Challenge**  
    {coding_section if coding_section else "Skip this section if not required."}  
-   - If included, make the problem aligned to the JD’s core skills.
+   - If included, make the problem aligned to the JD's core skills.
    - Provide sample input/output and a brief outline of the expected approach.
 
 3. **Short Answer Questions**  
@@ -60,19 +101,20 @@ Return only the test.
 
 """
 
-    payload = {"inputs": prompt, "options": {"wait_for_model": True}}
-    response = requests.post(API_URL, headers=headers, json=payload)
-
-    if response.status_code == 200:
-        output = response.json()
-        if isinstance(output, list):
-            return output[0]['generated_text']
-        elif isinstance(output, dict) and 'generated_text' in output:
-            return output['generated_text']
+    # Try Hugging Face first, then fallback to Gemini
+    try:
+        if HF_API_TOKEN:
+            return generate_with_huggingface(prompt)
         else:
-            return str(output)
-    else:
-        return f"Error: {response.status_code} - {response.text}"
+            raise Exception("Hugging Face API token not found")
+    except Exception as hf_error:
+        try:
+            if GEMINI_API_KEY:
+                return generate_with_gemini(prompt)
+            else:
+                raise Exception("Gemini API key not found")
+        except Exception as gemini_error:
+            raise Exception(f"Both APIs failed. HF: {str(hf_error)}, Gemini: {str(gemini_error)}")
 
 
 # Streamlit UI
@@ -98,6 +140,8 @@ num_short_ans = st.slider("Number of Short Answer Questions", 1, 5, 2)
 if st.button("🚀 Generate Interview Test"):
     if jd_input.strip() == "":
         st.warning("Please enter a valid Job Description.")
+    elif not HF_API_TOKEN and not GEMINI_API_KEY:
+        st.error("❌ No API keys configured. Please set either HF_API_KEY or GEMINI_API_KEY in your environment.")
     else:
         with st.spinner("Generating test... Please wait..."):
             try:
